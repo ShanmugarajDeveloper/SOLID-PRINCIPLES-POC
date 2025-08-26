@@ -1,0 +1,460 @@
+using System;
+using System.Collections.Generic;
+using System.Data.SqlClient;     // DIP violation: high-level code ties to concrete DB
+using System.IO;                 // SRP/OCP: ad-hoc file logging
+using System.Net.Http.Headers;
+using System.Net.Mail;           // DIP violation: concrete mailer
+
+//SOLID VOILATIONS
+//namespace ViolationsDemo
+//{
+//    // ===== ISP + LSP violations =====
+
+//    // ISP VIOLATION: Fat interface forces clients to implement things they don't need.
+//    public interface IMultiFunctionDevice
+//    {
+//        void Print(string text);
+//        void Scan();
+//        void Fax(string number);
+//    }
+
+//    // ISP VIOLATION: simple printer is forced to provide Scan/Fax it doesn't support.
+//    public class SimplePrinter : IMultiFunctionDevice
+//    {
+//        public void Print(string text) => Console.WriteLine($"Printing: {text}");
+//        public void Scan() => throw new NotImplementedException("This printer cannot scan."); // ISP break
+//        public void Fax(string number) => throw new NotImplementedException("This printer cannot fax."); // ISP break
+//    }
+
+//    // LSP VIOLATION: Subtype cannot honor the contract of the base class.
+//    public class Bird
+//    {
+//        public virtual void Fly()
+//        {
+//            Console.WriteLine("Flapping wings and flying!");
+//        }
+//    }
+
+//    public class Penguin : Bird
+//    {
+//        // LSP break: base promises 'Fly' works; subtype throws instead.
+//        public override void Fly() => throw new NotSupportedException("Penguins cannot fly.");
+//    }
+
+//    // ===== A grab-bag "God" class breaking SRP, OCP, DIP (and more) =====
+
+//    public class Order
+//    {
+//        public string Id { get; set; }
+//        public string CustomerType { get; set; } // "Gold", "Silver", "Regular"
+//        public decimal Amount { get; set; }
+//        public string PaymentMethod { get; set; } // "Card", "UPI", "COD", "Crypto", ...
+//        public string CustomerEmail { get; set; }
+//        public List<string> LineItems { get; set; } = new();
+//    }
+
+//    // SRP VIOLATION: This class does EVERYTHING: validate, price, discount, pay, persist, email, log, print, etc.
+//    // OCP VIOLATION: Long if/switch chains for behavior instead of polymorphism/strategies.
+//    // DIP VIOLATION: Depends on concrete SqlConnection, SmtpClient, File I/O; directly 'new's collaborators.
+//    public class OrderService
+//    {
+//        public void Process(Order order)
+//        {
+//            // --- Validation ---
+//            if (string.IsNullOrWhiteSpace(order.Id))
+//                throw new Exception("Missing Id");
+
+//            // --- Logging (FILE I/O inside business service) --- SRP break
+//            File.AppendAllText("app.log", $"{DateTime.UtcNow:u} Processing order {order.Id}\n");
+
+//            // --- Pricing & Discounts (business rules tangled here) --- SRP break
+//            decimal discount = 0m;
+//            // OCP break: add a new customer tier? modify this method.
+//            if (order.CustomerType == "Gold") discount = order.Amount * 0.2m;
+//            else if (order.CustomerType == "Silver") discount = order.Amount * 0.1m;
+//            else if (order.CustomerType == "Employee") discount = order.Amount * 0.5m; // slipped in here…
+//            else discount = 0m;
+
+//            var finalAmount = order.Amount - discount;
+
+//            // --- Payments --- OCP break: branching on strings instead of strategy
+//            // Add a new payment method? Touch this method again.
+//            if (order.PaymentMethod == "Card")
+//            {
+//                Console.WriteLine("Charging card gateway…");
+//            }
+//            else if (order.PaymentMethod == "UPI")
+//            {
+//                Console.WriteLine("Charging UPI…");
+//            }
+//            else if (order.PaymentMethod == "COD")
+//            {
+//                Console.WriteLine("Mark as cash on delivery.");
+//            }
+//            else if (order.PaymentMethod == "Crypto")
+//            {
+//                Console.WriteLine("Sending transaction to random crypto API…");
+//            }
+//            else
+//            {
+//                throw new Exception("Unknown payment method"); // brittle
+//            }
+
+//            // --- Persistence --- DIP break: concrete DB, inline SQL, no repo/abstraction, no parameters etc.
+//            using (var conn = new SqlConnection("Server=(local);Database=Prod;Trusted_Connection=True;"))
+//            {
+//                conn.Open();
+//                var cmd = conn.CreateCommand();
+//                cmd.CommandText = $"INSERT INTO Orders(Id, Amount) VALUES('{order.Id}', {finalAmount})"; // also: SQL injection risk
+//                cmd.ExecuteNonQuery();
+//            }
+
+//            // --- Emailing customer --- DIP break: direct SmtpClient usage
+//            try
+//            {
+//                var smtp = new SmtpClient("mail.example.com");
+//                smtp.Send("noreply@example.com", order.CustomerEmail, "Your order", $"Thanks! Final amount: {finalAmount}");
+//            }
+//            catch
+//            {
+//                // swallow errors (yikes)
+//            }
+
+//            // --- Printing label (unrelated IO) --- SRP break
+//            var device = new SimplePrinter();
+//            device.Print($"SHIP LABEL :: ORDER {order.Id} :: AMOUNT {finalAmount}");
+//            // ISP/LSP fallout: if device.Scan() is accidentally called, it throws at runtime
+
+//            // --- More logging (tight coupling, no abstraction) ---
+//            File.AppendAllText("app.log", $"{DateTime.UtcNow:u} Completed order {order.Id}\n");
+//        }
+
+//        // More OCP breakage: adding a new report requires editing this method instead of extending.
+//        public string GenerateReport(string format, List<Order> orders)
+//        {
+//            if (format == "csv")
+//            {
+//                return "id,amount\n" + string.Join("\n", orders.ConvertAll(o => $"{o.Id},{o.Amount}"));
+//            }
+//            else if (format == "json")
+//            {
+//                return "[ " + string.Join(", ", orders.ConvertAll(o => $"{{\"id\":\"{o.Id}\",\"amount\":{o.Amount}}}")) + " ]";
+//            }
+//            else if (format == "xml")
+//            {
+//                return "<orders>" + string.Join("", orders.ConvertAll(o => $"<o id=\"{o.Id}\" amount=\"{o.Amount}\" />")) + "</orders>";
+//            }
+//            else
+//            {
+//                // each new format forces changes here
+//                throw new NotSupportedException("Unknown report format");
+//            }
+//        }
+//    }
+
+//    // Quick-and-dirty demo (don’t run this in production, obviously)
+//    public class Program
+//    {
+//        public static void Main()
+//        {
+//            // LSP demo: will explode at runtime
+//            Bird b = new Penguin();
+//            try { b.Fly(); } catch (Exception ex) { Console.WriteLine($"LSP violated: {ex.Message}"); }
+
+//            var service = new OrderService();
+//            service.Process(new Order
+//            {
+//                Id = Guid.NewGuid().ToString("N"),
+//                CustomerType = "Gold",
+//                Amount = 1999.00m,
+//                PaymentMethod = "Crypto",
+//                CustomerEmail = "user@example.com",
+//                LineItems = new List<string> { "Widget-A", "Widget-B" }
+//            });
+
+//            var report = service.GenerateReport("xml", new List<Order>
+//            {
+//                new Order{ Id="A1", Amount=10 },
+//                new Order{ Id="B2", Amount=20 }
+//            });
+//            Console.WriteLine(report);
+//        }
+//    }
+//}
+
+
+
+namespace ViolationsFIXDemo
+{
+    public interface IMultiFunctionDevice
+    {
+        void Print(string text);
+        void Scan();
+        void Fax(string number);
+    }
+    public interface IPrintDevice
+    {
+        void Print(string text);
+    }
+    public interface IScanDevice
+    {
+        void Scan();
+    }
+    public interface IFaxDevice
+    {
+        void Fax(string number);
+    }
+    public class SimplePrinter : IPrintDevice
+    {
+        public void Print(string text) => Console.WriteLine($"Printing: {text}");
+    }
+    public abstract class Bird
+    {
+        public abstract void Eat();
+    }
+    public interface Iflyable
+    {
+        void Fly();
+    }
+    public class Eagle : Bird, Iflyable
+    {
+        public override void Eat()
+        {
+            Console.WriteLine("Eating Fish");
+        }
+
+        public void Fly()
+        {
+            Console.WriteLine("Flying with wings");
+        }
+    }
+
+    public class Penguin : Bird
+    {
+        public override void Eat() => Console.WriteLine("Eating ice and other things!");
+    }
+
+    public class Order
+    {
+        public string Id { get; set; }
+        public string CustomerType { get; set; } // "Gold", "Silver", "Regular"
+        public decimal Amount { get; set; }
+        public string PaymentMethod { get; set; } // "Card", "UPI", "COD", "Crypto", ...
+        public string CustomerEmail { get; set; }
+        public List<string> LineItems { get; set; } = new();
+        public decimal finalAmount { get; set; }
+        public decimal  discount { get; set; }
+    }
+
+    public interface IMessageService
+    {
+        void Send(string mailServerURL, string fromAddress, string toAddress, string subject = null, string body = null);
+    }
+    public class EmailService : IMessageService
+    {
+        public void Send(string mailServerURL, string fromAddress, string toAddress, string subject = null, string body = null)
+        {
+            var smtp = new SmtpClient(mailServerURL);
+            smtp.Send(fromAddress, toAddress, subject, body);
+        }
+    }
+    public interface ILoggingService
+    {
+        void Log(string message, string filename, string orderID);
+    }
+    public class FileLogService : ILoggingService
+    {
+        public void Log(string message, string filename, string orderID)
+        {
+            File.AppendAllText(filename, $"{DateTime.UtcNow:u} Completed order {orderID}\n");
+        }
+    }
+    public interface IDiscountService
+    {
+        decimal GetDiscount(decimal amount);
+    }
+    public class GoldDiscountService : IDiscountService
+    {
+        public decimal GetDiscount(decimal amount)
+        {
+            return amount * 0.2m;
+        }
+    }
+    public class SilverDiscountService : IDiscountService
+    {
+        public decimal GetDiscount(decimal amount)
+        {
+            return amount * 0.1m;
+        }
+    }
+    public class EmployeeDiscountService : IDiscountService
+    {
+        public decimal GetDiscount(decimal amount)
+        {
+            return amount * 0.5m;
+        }
+    }
+
+    public interface IPaymentMethodService
+    {
+        void Payment();
+    }
+    public class CardPaymentService : IPaymentMethodService
+    {
+        public void Payment()
+        {
+            Console.WriteLine("Charging card gateway…");
+        }
+    }
+    public class CryptoPaymentService : IPaymentMethodService
+    {
+        public void Payment()
+        {
+            Console.WriteLine("Sending transaction to random crypto API…");
+        }
+    }
+    public class UPIPaymentService : IPaymentMethodService
+    {
+        public void Payment()
+        {
+            Console.WriteLine("Charging UPI…");
+        }
+    }
+    public class CODPaymentService : IPaymentMethodService
+    {
+        public void Payment()
+        {
+            Console.WriteLine("Mark as cash on delivery.");
+        }
+    }
+
+    public interface IReportGenerator
+    {
+        string GenerateReport( List<Order> orders);
+    }
+    public class XmlReportGenerator : IReportGenerator
+    {
+        public string GenerateReport( List<Order> orders)
+        {
+            return "<orders>" + string.Join("", orders.ConvertAll(o => $"<o id=\"{o.Id}\" amount=\"{o.Amount}\" />")) + "</orders>";
+        }
+    }
+    public class JsonReportGenerator : IReportGenerator
+    {
+        public string GenerateReport( List<Order> orders)
+        {
+            return "[ " + string.Join(", ", orders.ConvertAll(o => $"{{\"id\":\"{o.Id}\",\"amount\":{o.Amount}}}")) + " ]";
+        }
+    }
+    public class ExcelReportGenerator : IReportGenerator
+    {
+        public string GenerateReport( List<Order> orders)
+        {
+            return "id,amount\n" + string.Join("\n", orders.ConvertAll(o => $"{o.Id},{o.Amount}"));
+        }
+    }
+
+    public interface IDBOperations
+    {
+        
+        void DBInsert(Order order);
+        
+    }
+
+    public class SQlServerOperations : IDBOperations
+    {
+        public void DBInsert(Order order)
+        {
+            using (var conn = new SqlConnection("Server=(local);Database=Prod;Trusted_Connection=True;"))
+            {
+                conn.Open();
+                var cmd = conn.CreateCommand();
+                cmd.CommandText = $"INSERT INTO Orders(Id, Amount) VALUES('{order.Id}', {order.finalAmount})"; // also: SQL injection risk
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+    public interface IOrderService
+    {
+        public void Process(Order order);
+        public string GenerateReport(List<Order> orderList);
+    }
+
+    public class OrderService:IOrderService
+    {
+        private readonly ILoggingService _loggingService;
+        private readonly IDiscountService _discountService;
+        private readonly IPaymentMethodService _paymentMethodService;
+        private readonly IDBOperations _dbOperations;
+        private readonly IMessageService _messageService;
+        private readonly IPrintDevice _printDevice;
+        private readonly IReportGenerator _reportGenerator;
+        public OrderService(ILoggingService loggingService,IDiscountService discountService,IPaymentMethodService paymentMethodService,IDBOperations dbOperations,IMessageService messageService,IPrintDevice printDevice,IReportGenerator reportGenerator)
+        {
+            _loggingService = loggingService;
+            _discountService = discountService;
+            _paymentMethodService = paymentMethodService;
+            _dbOperations = dbOperations;
+            _messageService = messageService;
+            _printDevice = printDevice;
+            _reportGenerator = reportGenerator;
+        }
+        public void Process(Order order)
+        {
+            // --- Validation ---
+            if (string.IsNullOrWhiteSpace(order.Id))
+                throw new Exception("Missing Id");
+
+            _loggingService.Log(message: $"{DateTime.UtcNow:u} Processing order", filename:"app.log",orderID: order.Id);
+            order.discount =_discountService.GetDiscount(order.Amount);
+            order.finalAmount = order.Amount - order.discount;
+            _paymentMethodService.Payment();
+            _dbOperations.DBInsert(order);
+            _messageService.Send(mailServerURL: "mail.example.com", fromAddress: "noreply@example.com", toAddress: order.CustomerEmail, subject: "Your order", body: $"Thanks! Final amount: {order.finalAmount}");
+            _printDevice.Print($"SHIP LABEL :: ORDER {order.Id} :: AMOUNT {order.finalAmount}");
+            _loggingService.Log(message: $"{DateTime.UtcNow:u} Completed order", filename: "app.log", orderID: order.Id);
+        }
+        public string GenerateReport(List<Order> orderList)
+        {
+           return _reportGenerator.GenerateReport(orderList);
+        }
+    }
+
+    public class Program
+    {
+        public static void Main()
+        {
+                Bird b = new Penguin();
+                b.Eat();
+                Bird c = new Eagle();
+                c.Eat();
+                Iflyable d= new Eagle();
+                d.Fly();
+
+            ILoggingService loggingService = new FileLogService ();
+            IDiscountService discountService = new GoldDiscountService();
+            IPaymentMethodService paymentMethodService = new CryptoPaymentService();
+            IDBOperations dBOperations  = new SQlServerOperations();
+            IMessageService messageService = new EmailService();
+            IPrintDevice printDevice = new SimplePrinter();
+            IReportGenerator reportGenerator = new XmlReportGenerator();
+            IOrderService service = new OrderService(loggingService, discountService, paymentMethodService, dBOperations, messageService, printDevice,reportGenerator);
+            service.Process(new Order
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                CustomerType = "Gold",
+                Amount = 1999.00m,
+                PaymentMethod = "Crypto",
+                CustomerEmail = "user@example.com",
+                LineItems = new List<string> { "Widget-A", "Widget-B" }
+            });
+
+            string reports = service.GenerateReport(new List<Order>
+            {
+                new Order{ Id="A1", Amount=10 },
+                new Order{ Id="B2", Amount=20 }
+            });
+            Console.WriteLine(reports);
+        }
+    }
+}
